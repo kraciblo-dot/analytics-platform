@@ -20,7 +20,6 @@ class Organization(Base):
     
     # Relationships
     users = relationship("User", back_populates="organization")
-    # Later, we will add 'events' and 'dashboards' here
 
 class User(Base):
     __tablename__ = "users"

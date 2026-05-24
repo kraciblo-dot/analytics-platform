@@ -15,13 +15,11 @@ app = FastAPI(
     title="Analytics Platform API",
     description="Real-Time Analytics & Reporting Platform",
     version="1.0.0",
-    # REMOVED the lifespan completely
 )
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# 4. Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"], 
@@ -30,7 +28,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 5. Register all your routers
 app.include_router(auth.router)
 app.include_router(events.router)
 app.include_router(analytics.router)

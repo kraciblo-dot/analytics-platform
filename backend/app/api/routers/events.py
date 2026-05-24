@@ -25,7 +25,7 @@ async def background_data_enrichment(event_count: int, org_id: int):
 async def ingest_events(
     request: Request,
     payload: EventBatchCreate, 
-    background_tasks: BackgroundTasks, # <-- Inject the background task manager
+    background_tasks: BackgroundTasks, 
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_owner),
     # current_user: User = Depends(get_current_user)
@@ -52,7 +52,7 @@ async def ingest_events(
     
     await db.commit()
     
-    # NEW: Offload the heavy processing to the background worker
+    # Offload the heavy processing to the background worker
     background_tasks.add_task(background_data_enrichment, len(db_events), org_id)
     
     return {

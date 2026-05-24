@@ -28,7 +28,7 @@ async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
         email=payload.email,
         hashed_password=hashed_pw,
         organization_id=new_org.id,
-        role="owner"  # <--- CRITICAL: The creator gets full admin rights
+        role="owner"  
     )
     db.add(new_user)
     await db.commit()
@@ -70,8 +70,6 @@ async def login(
 
 @router.post("/logout")
 async def logout():
-    # In a fully stateful app, you would blacklist the token in Redis here.
-    # For stateless JWTs, the frontend deleting the token handles the logout.
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh")

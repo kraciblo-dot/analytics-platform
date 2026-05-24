@@ -1,9 +1,7 @@
 import os
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import declarative_base
-
-# We'll use a local Postgres URL for now. 
-# You'll need a running Postgres instance on port 5432.
+ 
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
     "postgresql+asyncpg://postgres:postgres@localhost:5432/analytics_db"

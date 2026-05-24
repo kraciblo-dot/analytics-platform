@@ -21,11 +21,8 @@ async def get_time_series_data(
     """
     Returns aggregated daily counts for a specific event to power Line/Bar charts.
     """
-    # Calculate the cutoff date
     start_date = datetime.utcnow() - timedelta(days=days_back)
     
-    # SQLAlchemy query to group events by Date and count them
-    # func.date() strips the time so we group by the day
     stmt = (
         select(
             cast(Event.timestamp, Date).label("day"),
@@ -41,7 +38,6 @@ async def get_time_series_data(
     result = await db.execute(stmt)
     rows = result.all()
     
-    # Format the data for frontend charting libraries (like Recharts or Chart.js)
     chart_data = [
         {"date": row.day.strftime("%Y-%m-%d"), "count": row.total_count}
         for row in rows
