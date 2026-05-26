@@ -4,7 +4,6 @@ from pydantic import ValidationError
 
 from app.repositories.event_repo import EventRepository
 from app.schemas.event import EventCreate
-from app.tasks.event_tasks import process_event_async
 
 class EventService:
     def __init__(self, repo: EventRepository):
@@ -17,7 +16,7 @@ class EventService:
     async def process_batch_events(self, event_payloads: list[dict], org_id: int):
         """
         Processes a batch of events.
-        This is the method actually called by your background Celery worker.
+        Now called directly by your CSV upload flow.
         """
         for payload in event_payloads:
             payload["organization_id"] = org_id
@@ -26,10 +25,9 @@ class EventService:
         return len(event_payloads)
 
     async def process_csv_upload(self, file_content: str, org_id: int) -> dict:
-        from app.tasks.event_tasks import process_event_async
         """
-        Parses a flat CSV, validates against the Pydantic schema, and queues to Celery.
-        Any column that isn't 'event_name' or 'timestamp' becomes a property.
+        Parses a flat CSV, validates against the Pydantic schema, 
+        and inserts directly into the database.
         """
         reader = csv.DictReader(io.StringIO(file_content))
         valid_events = []
@@ -59,7 +57,7 @@ class EventService:
                 errors.append(f"Row {row_num} validation error: {e.errors()[0]['msg']}")
 
         if valid_events:
-            process_event_async.delay(valid_events, org_id)
+            await self.process_batch_events(valid_events, org_id)
 
         return {
             "queued_events": len(valid_events),
