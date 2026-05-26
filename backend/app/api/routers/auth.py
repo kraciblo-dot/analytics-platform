@@ -1,34 +1,32 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Cookie
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from jose import jwt, JWTError
 
 from app.db.database import get_db
-from app.models.tenant import User, Organization
+from app.models.tenant import User, Organization, RoleEnum
 from app.schemas.user import UserCreate
 from app.core import security
+from app.core.security import SECRET_KEY, ALGORITHM 
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
-    # 1. Check if the user already exists
     result = await db.execute(select(User).where(User.email == payload.email))
     if result.scalars().first():
         raise HTTPException(status_code=400, detail="Email already registered")
-
-    # 2. Create the brand new Organization
     new_org = Organization(name=payload.organization_name)
     db.add(new_org)
-    await db.flush() # Assigns an ID without committing the transaction yet
+    await db.flush() 
 
-    # 3. Create the User and assign them as the OWNER
     hashed_pw = security.get_password_hash(payload.password)
     new_user = User(
         email=payload.email,
         hashed_password=hashed_pw,
         organization_id=new_org.id,
-        role="owner"  
+        role=RoleEnum.OWNER  
     )
     db.add(new_user)
     await db.commit()
@@ -43,6 +41,7 @@ async def create_user(payload: UserCreate, db: AsyncSession = Depends(get_db)):
 
 @router.post("/login")
 async def login(
+    response: Response, 
     form_data: OAuth2PasswordRequestForm = Depends(), 
     db: AsyncSession = Depends(get_db)
 ):
@@ -57,22 +56,58 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Bake the organization ID and the Role into the secure token
-    access_token = security.create_access_token(
-        data={
-            "sub": user.email, 
-            "org_id": user.organization_id,
-            "role": user.role
-        }
+    token_data = {
+        "sub": user.email, 
+        "org_id": user.organization_id,
+        "role": user.role.value if isinstance(user.role, RoleEnum) else user.role
+    }
+    
+    access_token = security.create_access_token(data=token_data)
+    refresh_token = security.create_refresh_token(data={"sub": user.email})
+    
+    # Set the HTTP-Only cookie
+    response.set_cookie(
+        key="refresh_token",
+        value=refresh_token,
+        httponly=True,
+        secure=True, 
+        max_age=7 * 24 * 60 * 60 
     )
     
     return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/logout")
-async def logout():
+async def logout(response: Response):
+    response.delete_cookie(key="refresh_token", httponly=True, secure=True, samesite="lax")
     return {"message": "Successfully logged out"}
 
 @router.post("/refresh")
-async def refresh_token():
-    # Placeholder for the HTTP-only refresh cookie flow
-    raise HTTPException(status_code=501, detail="Refresh logic implemented via interceptor")
+async def refresh_access_token(
+    refresh_token: str | None = Cookie(default=None),
+    db: AsyncSession = Depends(get_db)
+):
+    if not refresh_token:
+        raise HTTPException(status_code=401, detail="Refresh token missing")
+        
+    try:
+        payload = jwt.decode(refresh_token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+            
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalars().first()
+        if not user or not user.is_active:
+            raise HTTPException(status_code=401, detail="User inactive or deleted")
+            
+        new_token_data = {
+            "sub": user.email, 
+            "org_id": user.organization_id,
+            "role": user.role.value if isinstance(user.role, RoleEnum) else user.role
+        }
+        new_access_token = security.create_access_token(data=new_token_data)
+        
+        return {"access_token": new_access_token, "token_type": "bearer"}
+        
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")

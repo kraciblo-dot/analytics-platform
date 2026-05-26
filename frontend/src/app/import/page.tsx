@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import Papa from "papaparse";
 import toast from "react-hot-toast";
 import { api } from "@/lib/api";
 import { UploadCloud, ArrowLeft, FileType } from "lucide-react";
@@ -12,48 +11,37 @@ export default function ImportPage() {
   const [isUploading, setIsUploading] = useState(false);
   const router = useRouter();
 
-  const processFile = (file: File) => {
+  const processFile = async (file: File) => {
+    // Basic validation
     if (file.type !== "text/csv" && !file.name.endsWith(".csv")) {
       toast.error("Please upload a valid CSV file");
       return;
     }
 
     setIsUploading(true);
-    const loadingToast = toast.loading("Parsing and uploading data...");
+    const loadingToast = toast.loading("Uploading CSV to server...");
 
-    Papa.parse(file, {
-      header: true,
-      skipEmptyLines: true,
-      complete: async (results) => {
-        try {
-          // Format the parsed CSV data to match our FastAPI Pydantic schema
-          const formattedEvents = results.data.map((row: any) => ({
-            event_name: row.event_name,
-            timestamp: row.timestamp || new Date().toISOString(),
-            // Safely parse the JSON string back into an object
-            properties: row.properties ? JSON.parse(row.properties) : {}
-          }));
+    try {
+      // Pack the raw file into FormData so FastAPI can pick it up as an UploadFile
+      const formData = new FormData();
+      formData.append("file", file);
 
-          // Send the batch payload to our backend
-          await api.post("/events/ingest", { events: formattedEvents });
+      // Hit our dedicated file upload endpoint!
+      const res = await api.post("/api/events/upload-csv", formData);
 
-          toast.success(`Successfully imported ${formattedEvents.length} events!`, { id: loadingToast });
-          
-          // Route back to the dashboard to see the new data
-          setTimeout(() => router.push("/"), 1500);
+      toast.success(res.data.message || "Successfully queued events!", { id: loadingToast });
+      
+      // Route back to the dashboard to see the new data
+      setTimeout(() => router.push("/"), 1500);
 
-        } catch (error) {
-          console.error("Upload failed", error);
-          toast.error("Failed to ingest data. Check your CSV format.", { id: loadingToast });
-        } finally {
-          setIsUploading(false);
-        }
-      },
-      error: () => {
-        toast.error("Error reading the file", { id: loadingToast });
-        setIsUploading(false);
-      }
-    });
+    } catch (error: any) {
+      console.error("Upload failed", error);
+      // Axios wraps backend errors in err.response.data
+      const errorMsg = error.response?.data?.detail || "Failed to upload data. Please check your CSV format.";
+      toast.error(errorMsg, { id: loadingToast });
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleDrop = (e: React.DragEvent) => {
