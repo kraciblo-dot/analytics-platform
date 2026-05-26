@@ -48,30 +48,47 @@ async def ingest_events(
     }
 
 
-@router.post("/upload-csv", status_code=202)
-@limiter.limit("50/minute") 
+# @router.post("/upload-csv", status_code=202)
+# @limiter.limit("50/minute") 
+# async def upload_events_csv(
+#     request: Request,
+#     background_tasks: BackgroundTasks, 
+#     file: UploadFile = File(...),
+#     current_user: User = Depends(get_current_owner),
+# ):
+#     """
+#     Accepts a CSV file of events, validates the format, and instantly 
+#     queues them for async database insertion in the background.
+#     """
+#     if not file.filename.endswith('.csv'):
+#         raise HTTPException(status_code=400, detail="Invalid file type. Must be a CSV.")
+    
+#     content = await file.read()
+#     try:
+#         text_content = content.decode("utf-8")
+#     except UnicodeDecodeError:
+#         raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+
+#     background_tasks.add_task(background_csv_processor, text_content, current_user.organization_id)
+
+#     return {
+#         "status": "accepted",
+#         "message": "CSV upload accepted. Processing records in the background."
+#     }
+
+@router.post("/upload-csv", status_code=200)
 async def upload_events_csv(
-    request: Request,
-    background_tasks: BackgroundTasks, 
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_owner),
+    service: EventService = Depends(get_event_service)
 ):
-    """
-    Accepts a CSV file of events, validates the format, and instantly 
-    queues them for async database insertion in the background.
-    """
-    if not file.filename.endswith('.csv'):
-        raise HTTPException(status_code=400, detail="Invalid file type. Must be a CSV.")
-    
     content = await file.read()
-    try:
-        text_content = content.decode("utf-8")
-    except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
-
-    background_tasks.add_task(background_csv_processor, text_content, current_user.organization_id)
+    text_content = content.decode("utf-8")
+    
+    result = await service.process_csv_upload(text_content, current_user.organization_id)
 
     return {
-        "status": "accepted",
-        "message": "CSV upload accepted. Processing records in the background."
+        "status": "success",
+        "message": f"Processed {result['queued_events']} events.",
+        "errors": result["errors"]
     }
