@@ -1,62 +1,70 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
+from fastapi import APIRouter, Depends, Request, UploadFile, File, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
-import asyncio
 
-from app.db.database import get_db
-from app.models.event import Event
 from app.schemas.event import EventBatchCreate
-from app.api.deps import get_current_user
-from app.models.tenant import User
-from app.api.ws_manager import manager 
-from app.core.limiter import limiter
 from app.api.deps import get_current_owner
+from app.models.tenant import User
+from app.core.limiter import limiter
+from app.tasks.event_tasks import process_event_async
+from app.db.database import get_db
+from app.repositories.event_repo import EventRepository
+from app.services.event_service import EventService
 
 router = APIRouter(prefix="/api/events", tags=["Data Ingestion"])
 
-# Simulated Celery Worker Function
-async def background_data_enrichment(event_count: int, org_id: int):
-    """Simulates a heavy background task like IP geolocation or sending to a data lake."""
-    await asyncio.sleep(2)  # Simulate network delay
-    print(f"[BACKGROUND WORKER] Successfully enriched {event_count} events for Org {org_id}")
+def get_event_service(db: AsyncSession = Depends(get_db)) -> EventService:
+    repo = EventRepository(db)
+    return EventService(repo)
 
-@router.post("/ingest", status_code=202) # 202 is the correct HTTP status for async queues
+@router.post("/ingest", status_code=202)
 @limiter.limit("100/minute")
 async def ingest_events(
     request: Request,
     payload: EventBatchCreate, 
-    background_tasks: BackgroundTasks, 
-    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_owner),
-    # current_user: User = Depends(get_current_user)
 ):
+    """
+    Ingest events asynchronously. 
+    Returns a 202 Accepted immediately while Celery processes the data.
+    """
     org_id = current_user.organization_id
-    db_events = []
     
-    for ev in payload.events:
-        db_event = Event(
-            organization_id=org_id,
-            event_name=ev.event_name,
-            properties=ev.properties,
-            timestamp=ev.timestamp or datetime.utcnow()
-        )
-        db.add(db_event)
-        db_events.append(db_event)
-        
-        # Broadcast to UI immediately
-        await manager.broadcast_to_org({
-            "event_name": ev.event_name,
-            "properties": ev.properties,
-            "timestamp": str(db_event.timestamp)
-        }, org_id)
+    event_dicts = [ev.model_dump() for ev in payload.events]
     
-    await db.commit()
-    
-    # Offload the heavy processing to the background worker
-    background_tasks.add_task(background_data_enrichment, len(db_events), org_id)
+    process_event_async.delay(event_dicts, org_id)
     
     return {
         "status": "accepted", 
-        "message": f"Queued {len(db_events)} events for background processing",
+        "message": f"Queued {len(event_dicts)} events for background processing via Celery",
         "organization_id": org_id
+    }
+
+
+@router.post("/upload-csv", status_code=202)
+@limiter.limit("50/minute") 
+async def upload_events_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_owner),
+    service: EventService = Depends(get_event_service)
+):
+    """
+    Accepts a CSV file of events, parses properties dynamically, 
+    and queues them for async database insertion.
+    """
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Invalid file type. Must be a CSV.")
+    
+    content = await file.read()
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File must be UTF-8 encoded.")
+
+    result = await service.process_csv_upload(text_content, current_user.organization_id)
+
+    return {
+        "status": "accepted",
+        "message": f"Processed CSV. Queued {result['queued_events']} valid events.",
+        "errors": result["errors"]  
     }

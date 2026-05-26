@@ -4,9 +4,21 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Activity, ArrowRight, Building, Lock, Mail } from "lucide-react";
 import toast from "react-hot-toast";
+import { jwtDecode } from "jwt-decode";
+import { useAuthStore } from "@/store/useAuthStore";
+import { api } from "@/lib/api"; 
+
+interface AuthTokenPayload {
+  sub: string;
+  org_id: number;
+  role: string;
+  exp: number;
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const setAuth = useAuthStore((state) => state.setAuth);
+  
   const [isLogin, setIsLogin] = useState(true);
   const [loading, setLoading] = useState(false);
   
@@ -21,47 +33,47 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const baseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
-
       if (isLogin) {
-        // Login Flow (Requires Form Data format for OAuth2)
-        const params = new URLSearchParams();
+        // Login Flow 
+        const params = new FormData();
         params.append("username", formData.email);
         params.append("password", formData.password);
 
-        const res = await fetch(`${baseUrl}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: params,
-        });
-
-        if (!res.ok) throw new Error("Invalid credentials");
-        const data = await res.json();
+        // Using our Axios instance 
+        const res = await api.post("/api/auth/login", params);
+        const token = res.data.access_token;
         
-        // Save the token and go to dashboard
-        localStorage.setItem("access_token", data.access_token);
+        // Decode the token to extract the user's role and organization ID
+        const decoded = jwtDecode<AuthTokenPayload>(token);
+        
+        setAuth(
+          {
+            id: 0, 
+            email: decoded.sub,
+            role: decoded.role,
+            organization_id: decoded.org_id,
+          },
+          token
+        );
+
         toast.success("Welcome back!");
-        router.push("/");
+        router.push("/"); // Now that Zustand has the data, the dashboard will let us in
 
       } else {
         // Signup Flow
-        const res = await fetch(`${baseUrl}/auth/signup`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: formData.email,
-            password: formData.password,
-            organization_name: formData.organization_name
-          }),
+        await api.post("/api/auth/signup", {
+          email: formData.email,
+          password: formData.password,
+          organization_name: formData.organization_name
         });
 
-        if (!res.ok) throw new Error("Signup failed. Email might exist.");
-        
         toast.success("Account created! Please log in.");
-        setIsLogin(true);
+        setIsLogin(true); // Flip back to login mode so they can actually sign in
       }
     } catch (err: any) {
-      toast.error(err.message || "Authentication failed");
+      // Axios wraps errors in err.response.data
+      const errorMessage = err.response?.data?.detail || "Authentication failed";
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -79,7 +91,7 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold text-gray-900">
             {isLogin ? "Welcome back" : "Create your workspace"}
           </h1>
-          <p className="text-gray-500 text-sm mt-2">
+          <p className="text-gray-500 text-sm mt-2 text-center">
             {isLogin ? "Enter your details to access your dashboard" : "Set up your organization in seconds"}
           </p>
         </div>
